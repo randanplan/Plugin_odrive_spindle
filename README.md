@@ -1,8 +1,6 @@
-## VFD plugin
+## ODrive plugin
 
-This plugin adds support for Huanyang VFD spindles via ModBus (RS485).
-
-For testing! Not production ready!
+This plugin adds support for ODrive spindles via CANBus .
 
 ---
-2020-07-10
+2021-06-27
