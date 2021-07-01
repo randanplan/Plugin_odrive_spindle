@@ -8,18 +8,12 @@
 
 #include <stdint.h>
 
-/* FlexCAN module I/O Base Addresss */
-// #define FLEXCAN0_BASE			(0x40024000L)
-// #define FLEXCAN1_BASE			(0x400A4000L)
-
 typedef volatile uint32_t vuint32_t;
 
-// typedef enum CAN_DEV_TABLE {
 #define CAN0 (0x0)
 #define CAN1 (0x401D0000)
 #define CAN2 (0x401D4000)
 #define CAN3 (0x401D8000)
-// } CAN_DEV_TABLE;
 
 #define FLEXCANb_MCR(b)           (*(vuint32_t*)(b))
 #define FLEXCANb_CTRL1(b)         (*(vuint32_t*)(b+4))
@@ -99,162 +93,6 @@ typedef volatile uint32_t vuint32_t;
 #define BIT29            (0x20000000L)
 #define BIT30            (0x40000000L)
 #define BIT31            (0x80000000L)
-
-
-/*********************************************************************
-*
-* FlexCAN0 (FLEXCAN0)
-*
-*********************************************************************/
-
-// /* Register read/write macros */
-// #define FLEXCAN0_MCR                   (*(vuint32_t*)(FLEXCAN0_BASE))
-// #define FLEXCAN0_CTRL1                  (*(vuint32_t*)(FLEXCAN0_BASE+4))
-// #define FLEXCAN0_TIMER                 (*(vuint32_t*)(FLEXCAN0_BASE+8))
-// #define FLEXCAN0_TCR                   (*(vuint32_t*)(FLEXCAN0_BASE+0x0C))
-// #define FLEXCAN0_RXMGMASK               (*(vuint32_t*)(FLEXCAN0_BASE+0x10))
-// #define FLEXCAN0_RX14MASK              (*(vuint32_t*)(FLEXCAN0_BASE+0x14))
-// #define FLEXCAN0_RX15MASK              (*(vuint32_t*)(FLEXCAN0_BASE+0x18))
-// #define FLEXCAN0_ECR                   (*(vuint32_t*)(FLEXCAN0_BASE+0x1C))
-// #define FLEXCAN0_ESR1                  (*(vuint32_t*)(FLEXCAN0_BASE+0x20))
-// #define FLEXCAN0_IMASK2                (*(vuint32_t*)(FLEXCAN0_BASE+0x24))
-// #define FLEXCAN0_IMASK1                (*(vuint32_t*)(FLEXCAN0_BASE+0x28))
-// #define FLEXCAN0_IFLAG2                (*(vuint32_t*)(FLEXCAN0_BASE+0x2C))
-// #define FLEXCAN0_IFLAG1                (*(vuint32_t*)(FLEXCAN0_BASE+0x30))
-// #define FLEXCAN0_CTRL2                 (*(vuint32_t*)(FLEXCAN0_BASE+0x34))
-// #define FLEXCAN0_ESR2                  (*(vuint32_t*)(FLEXCAN0_BASE+0x38))
-// #define FLEXCAN0_FUREQ                 (*(vuint32_t*)(FLEXCAN0_BASE+0x3C))
-// #define FLEXCAN0_FUACK                 (*(vuint32_t*)(FLEXCAN0_BASE+0x40))
-// #define FLEXCAN0_CRCR                  (*(vuint32_t*)(FLEXCAN0_BASE+0x44))
-// #define FLEXCAN0_RXFGMASK              (*(vuint32_t*)(FLEXCAN0_BASE+0x48))
-// #define FLEXCAN0_RXFIR                 (*(vuint32_t*)(FLEXCAN0_BASE+0x4C))
-// #define FLEXCAN0_DBG1                  (*(vuint32_t*)(FLEXCAN0_BASE+0x58))
-// #define FLEXCAN0_DBG2                  (*(vuint32_t*)(FLEXCAN0_BASE+0x5C))
-
-// #define FLEXCAN0_IMEUR                 FLEXCAN0_FUREQ
-// #define FLEXCAN0_LRFR                  FLEXCAN0_FUACK
-
-
-// /* Message Buffers */
-// #define FLEXCAN0_MB0_CS                (*(vuint32_t*)(FLEXCAN0_BASE+0x80))
-// #define FLEXCAN0_MB0_ID                (*(vuint32_t*)(FLEXCAN0_BASE+0x84))
-// #define FLEXCAN0_MB0_WORD0             (*(vuint32_t*)(FLEXCAN0_BASE+0x88))
-// #define FLEXCAN0_MB0_WORD1             (*(vuint32_t*)(FLEXCAN0_BASE+0x8C))
-
-// #define FLEXCAN0_MBn_CS(n)			(*(vuint32_t*)(FLEXCAN0_BASE+0x80+n*0x10))
-// #define FLEXCAN0_MBn_ID(n)			(*(vuint32_t*)(FLEXCAN0_BASE+0x84+n*0x10))
-// #define FLEXCAN0_MBn_WORD0(n)		(*(vuint32_t*)(FLEXCAN0_BASE+0x88+n*0x10))
-// #define FLEXCAN0_MBn_WORD1(n)		(*(vuint32_t*)(FLEXCAN0_BASE+0x8C+n*0x10))
-
-// /* Rx Individual Mask Registers */
-// #define FLEXCAN0_RXIMR0                (*(vuint32_t*)(FLEXCAN0_BASE+0x880))
-// #define FLEXCAN0_RXIMRn(n)             (*(vuint32_t*)(FLEXCAN0_BASE+0x880+n*4))
-
-// /* Rx FIFO ID Filter Table Element 0 to 127 */
-// #define FLEXCAN0_IDFLT_TAB0		(*(vuint32_t*)(FLEXCAN0_BASE+0xE0))
-// #define FLEXCAN0_IDFLT_TAB(n)		(*(vuint32_t*)(FLEXCAN0_BASE+0xE0+(n*4)))
-// //#define FLEXCAN0_IDFLT_TAB(n)		(*(vuint32_t*)(FLEXCAN0_BASE+0xE0+(n<<2)))
-
-// /* Memory Error Control Register */
-// #define FLEXCAN0_MECR					*(vuint32_t*)(FLEXCAN0_BASE+0x3B70))
-
-// /* Error Injection Address Register */
-// #define FLEXCAN0_ERRIAR					*(vuint32_t*)(FLEXCAN0_BASE+0x3B74))
-
-// /* Error Injection Data Pattern Register */
-// #define FLEXCAN0_ERRIDPR				*(vuint32_t*)(FLEXCAN0_BASE+0x3B78))
-
-// /* Error Injection Parity Pattern Register */
-// #define FLEXCAN0_ERRIPPR				*(vuint32_t*)(FLEXCAN0_BASE+0x3B7C))
-
-// /* Error Report Address Register */
-// #define FLEXCAN0_RERRAR					*(vuint32_t*)(FLEXCAN0_BASE+0x3B80))
-
-// /* Error Report Data Register */
-// #define FLEXCAN0_RERRDR					*(vuint32_t*)(FLEXCAN0_BASE+0x3B84))
-
-// /* Error Report Syndrome Register */
-// #define FLEXCAN0_RERRSYNR				*(vuint32_t*)(FLEXCAN0_BASE+0x3B88))
-
-// /* Error Status Register */
-// #define FLEXCAN0_ERRSR					*(vuint32_t*)(FLEXCAN0_BASE+0x3B8C))
-
-
-// /*********************************************************************
-// *
-// * FlexCAN1 (FLEXCAN1)
-// *
-// *********************************************************************/
-// /* Register read/write macros */
-// #define FLEXCAN1_MCR                   (*(vuint32_t*)(FLEXCAN1_BASE))
-// #define FLEXCAN1_CTRL1                 (*(vuint32_t*)(FLEXCAN1_BASE+4))
-// #define FLEXCAN1_TIMER                 (*(vuint32_t*)(FLEXCAN1_BASE+8))
-// #define FLEXCAN1_TCR                   (*(vuint32_t*)(FLEXCAN1_BASE+0x0C))
-// #define FLEXCAN1_RXMGMASK              (*(vuint32_t*)(FLEXCAN1_BASE+0x10))
-// #define FLEXCAN1_RX14MASK              (*(vuint32_t*)(FLEXCAN1_BASE+0x14))
-// #define FLEXCAN1_RX15MASK              (*(vuint32_t*)(FLEXCAN1_BASE+0x18))
-// #define FLEXCAN1_ECR                   (*(vuint32_t*)(FLEXCAN1_BASE+0x1C))
-// #define FLEXCAN1_ESR1                  (*(vuint32_t*)(FLEXCAN1_BASE+0x20))
-// #define FLEXCAN1_IMASK2                (*(vuint32_t*)(FLEXCAN1_BASE+0x24))
-// #define FLEXCAN1_IMASK1                (*(vuint32_t*)(FLEXCAN1_BASE+0x28))
-// #define FLEXCAN1_IFLAG2                (*(vuint32_t*)(FLEXCAN1_BASE+0x2C))
-// #define FLEXCAN1_IFLAG1                (*(vuint32_t*)(FLEXCAN1_BASE+0x30))
-// #define FLEXCAN1_CTRL2                 (*(vuint32_t*)(FLEXCAN1_BASE+0x34))
-// #define FLEXCAN1_ESR2                  (*(vuint32_t*)(FLEXCAN1_BASE+0x38))
-// #define FLEXCAN1_FUREQ                 (*(vuint32_t*)(FLEXCAN1_BASE+0x3C))
-// #define FLEXCAN1_FUACK                 (*(vuint32_t*)(FLEXCAN1_BASE+0x40))
-// #define FLEXCAN1_CRCR                  (*(vuint32_t*)(FLEXCAN1_BASE+0x44))
-// #define FLEXCAN1_RXFGMASK              (*(vuint32_t*)(FLEXCAN1_BASE+0x48))
-// #define FLEXCAN1_RXFIR                 (*(vuint32_t*)(FLEXCAN1_BASE+0x4C))
-// #define FLEXCAN1_DBG1                  (*(vuint32_t*)(FLEXCAN1_BASE+0x58))
-// #define FLEXCAN1_DBG2                  (*(vuint32_t*)(FLEXCAN1_BASE+0x5C))
-
-// #define FLEXCAN1_IMEUR                 FLEXCAN1_FUREQ
-// #define FLEXCAN1_LRFR                  FLEXCAN1_FUACK
-
-// /* Message Buffers */
-// #define FLEXCAN1_MB0_CS                (*(vuint32_t*)(FLEXCAN1_BASE+0x80))
-// #define FLEXCAN1_MB0_ID                (*(vuint32_t*)(FLEXCAN1_BASE+0x84))
-// #define FLEXCAN1_MB0_WORD0             (*(vuint32_t*)(FLEXCAN1_BASE+0x88))
-// #define FLEXCAN1_MB0_WORD1             (*(vuint32_t*)(FLEXCAN1_BASE+0x8C))
-
-// #define FLEXCAN1_MBn_CS(n)		        (*(vuint32_t*)(FLEXCAN1_BASE+0x80+n*0x10))
-// #define FLEXCAN1_MBn_ID(n)				(*(vuint32_t*)(FLEXCAN1_BASE+0x84+n*0x10))
-// #define FLEXCAN1_MBn_WORD0(n)			(*(vuint32_t*)(FLEXCAN1_BASE+0x88+n*0x10))
-// #define FLEXCAN1_MBn_WORD1(n)			(*(vuint32_t*)(FLEXCAN1_BASE+0x8C+n*0x10))
-
-// /* Rx Individual Mask Registers */
-// #define FLEXCAN1_RXIMR0                (*(vuint32_t*)(FLEXCAN1_BASE+0x880))
-// #define FLEXCAN1_RXIMRn(n)             (*(vuint32_t*)(FLEXCAN1_BASE+0x880+n*4))
-
-
-// /* Rx FIFO ID Filter Table Element 0 to 127 */
-// #define FLEXCAN1_IDFLT_TAB0		(*(vuint32_t*)(FLEXCAN1_BASE+0xE0))
-// #define FLEXCAN1_IDFLT_TAB(n)		(*(vuint32_t*)(FLEXCAN1_BASE+0xE0+(n<<2)))
-
-// /* Memory Error Control Register */
-// #define FLEXCAN1_MECR					*(vuint32_t*)(FLEXCAN1_BASE+0x7B70))
-
-// /* Error Injection Address Register */
-// #define FLEXCAN1_ERRIAR					*(vuint32_t*)(FLEXCAN1_BASE+0x3B74))
-
-// /* Error Injection Data Pattern Register */
-// #define FLEXCAN1_ERRIDPR				*(vuint32_t*)(FLEXCAN1_BASE+0x3B78))
-
-// /* Error Injection Parity Pattern Register */
-// #define FLEXCAN1_ERRIPPR				*(vuint32_t*)(FLEXCAN1_BASE+0x3B7C))
-
-// /* Error Report Address Register */
-// #define FLEXCAN1_RERRAR					*(vuint32_t*)(FLEXCAN1_BASE+0x3B80))
-
-// /* Error Report Data Register */
-// #define FLEXCAN1_RERRDR					*(vuint32_t*)(FLEXCAN1_BASE+0x3B84))
-
-// /* Error Report Syndrome Register */
-// #define FLEXCAN1_RERRSYNR				*(vuint32_t*)(FLEXCAN1_BASE+0x3B88))
-
-// /* Error Status Register */
-// #define FLEXCAN1_ERRSR					*(vuint32_t*)(FLEXCAN1_BASE+0x3B8C))
 
 /* Bit definitions and macros for FLEXCAN_MCR */
 #define FLEXCAN_MCR_MAXMB(x)           (((x)&0x0000007F)<<0)

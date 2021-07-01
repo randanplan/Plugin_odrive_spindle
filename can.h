@@ -46,7 +46,6 @@ typedef struct CAN_sync_message_t{
   uint32_t time;
   uint32_t time_end;
   CAN_message_t *msg;
-  // CAN_message_t *msg_prev;
 }CAN_sync_message_t;
 
 typedef enum FLEXCAN_MAILBOX {
