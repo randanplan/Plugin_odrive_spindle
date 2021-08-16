@@ -70,7 +70,7 @@ typedef void (*_MB_ptr)(CAN_message_t *msg); /* mailbox / global callbacks */
 
 extern void canbus_events(uint_fast16_t state);
 
-extern void canbus_init();
+extern void canbus_init(void);
 extern void canbus_begin(_MB_ptr handler, uint32_t baudrate);
 extern bool canbus_connected();
 extern int canbus_write(CAN_message_t *msg);

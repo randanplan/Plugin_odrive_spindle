@@ -13,8 +13,67 @@
 #define SIZE_LISTENERS 4
 #define SIZE_RX_SYNC_BUFFER 4
 #define SIZE_TX_BUFFER 8
+#define SIZE_ERR_BUFFER 8
 
 #define BUFCOUNT(head, tail, size) ((head >= tail) ? (head - tail) : (size - tail + head))
+
+typedef struct {
+    pin_info_t rx_pin;
+    pin_info_t tx_pin;
+    CAN_Type_t *port;
+    enum IRQ_NUMBER_t irq;
+} can_hardware_t;
+
+static const can_hardware_t can2_hardware = {
+    .port = &FLEXCAN2,
+    .irq = IRQ_CAN2,
+    .rx_pin = {
+        .pin = 0,
+        .mux_val = 0 | 0x10,
+    },
+    .tx_pin = {
+        .pin = 1,
+        .mux_val = 0 | 0x10,
+        // .select_reg = &IOMUXC_FLEXCAN2_RX_SELECT_INPUT,
+        // .select_val = 1
+    }
+};
+
+  // IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B0_02 =  0x10; // pin 1 T4B1+B2
+  // IOMUXC_SW_PAD_CTL_PAD_GPIO_AD_B0_02 = 0x10B0; // pin 1 T4B1+B2
+  // IOMUXC_FLEXCAN2_RX_SELECT_INPUT = 0x01;
+  // IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B0_03 = 0x10; // pin 0 T4B1+B2
+  // IOMUXC_SW_PAD_CTL_PAD_GPIO_AD_B0_03 = 0x10B0; // pin 0 T4B1+B2
+
+typedef struct buf_error_t{
+    volatile uint_fast16_t head;
+    volatile uint_fast16_t tail;
+    uint_fast16_t size;
+    volatile uint_fast16_t count;
+    uint32_t data[SIZE_ERR_BUFFER];
+    uint16_t data_ECR[SIZE_ERR_BUFFER];
+} buf_error_t;
+
+typedef struct CAN_error_t {
+  char state[30];// = "Idle";
+  bool BIT1_ERR;// = 0;
+  bool BIT0_ERR;// = 0;
+  bool ACK_ERR;// = 0;
+  bool CRC_ERR;// = 0;
+  bool FRM_ERR;// = 0;
+  bool STF_ERR;// = 0;
+  bool TX_WRN;// = 0;
+  bool RX_WRN;// = 0;
+  char FLT_CONF[14];// = { 0 };
+  uint8_t RX_ERR_COUNTER;// = 0;
+  uint8_t TX_ERR_COUNTER;// = 0;
+  uint32_t ESR1;// = 0;
+  uint16_t ECR;// = 0;
+}CAN_error_t ;
+
+static CAN_error_t can_error = {.state="Idle"/*,.FLT_CONF={0}*/};
+static buf_error_t busESR1 = {.head=0,.tail=0,.size=8,.count=0,.data={0},.data_ECR={0}};
+// static buf_16u_t busECR = {.head=0,.tail=0,.size=8,.count=0,.data={0}};
 
 typedef struct can_tx_buffer_t{
     volatile uint_fast16_t head;
@@ -54,7 +113,70 @@ static uint8_t mailbox_reader_increment = 0;
 static on_report_options_ptr on_report_options;
 static on_execute_realtime_ptr on_execute_realtime;
 static bool initOK = false;
-static bool canbus_On = false;
+// static bool canbus_On = false;
+// static uint32_t last_esr1 = 0;
+// static bool got_error = false;
+
+static void printErrors() {
+  busESR1.count--;
+  char msgString[150];
+  // char c_error[15]={0};
+  char c_err_conf[30];
+  char c_err_tx[15];
+  char c_err_rx[15];
+  // Serial.print(can_error.state);
+  // if ( can_error.BIT1_ERR ) sprintf(c_error,", BIT1_ERR");
+  // if ( can_error.BIT0_ERR ) sprintf(c_error,", BIT0_ERR");
+  // if ( can_error.ACK_ERR ) sprintf(c_error,", ACK_ERR");
+  // if ( can_error.CRC_ERR ) sprintf(c_error,", CRC_ERR");
+  // if ( can_error.FRM_ERR ) sprintf(c_error,", FRM_ERR");
+  // if ( can_error.STF_ERR ) sprintf(c_error,", STF_ERR");
+  if ( can_error.RX_WRN ) sprintf(c_err_rx, ", RX_WRN: %d", can_error.RX_ERR_COUNTER);
+  if ( can_error.TX_WRN ) sprintf(c_err_tx, ", TX_WRN: %d", can_error.TX_ERR_COUNTER);
+  sprintf(c_err_conf,", FLT_CONF: %s\n", can_error.FLT_CONF);
+  sprintf(msgString,"FlexCAN State: %s%s%s%s%s%s%s%s%s%s",can_error.state, 
+                    can_error.BIT1_ERR?", BIT1_ERR":"",
+                    can_error.BIT0_ERR?", BIT0_ERR":"",
+                    can_error.ACK_ERR?", ACK_ERR":"",
+                    can_error.CRC_ERR?", CRC_ERR":"",
+                    can_error.FRM_ERR?", FRM_ERR":"",
+                    can_error.STF_ERR?", STF_ERR":"",
+                    c_err_tx,
+                    c_err_rx,
+                    c_err_conf);
+}
+
+bool got_error() {
+  if ( !busESR1.count ) return 0;
+  NVIC_DISABLE_IRQ(nvicIrq);
+  uint_fast16_t next = busESR1.tail+1 >= busESR1.head ? busESR1.head : busESR1.tail+1;
+  can_error.ESR1 = busESR1.data[busESR1.tail];
+  can_error.ECR = busESR1.data_ECR[busESR1.tail];
+  busESR1.tail = next;
+  if ( (can_error.ESR1 & 0x400C8) == 0x40080 ) strncpy(can_error.state, "Idle", (sizeof(can_error.state) - 1));
+  else if ( (can_error.ESR1 & 0x400C8) == 0x0 ) strncpy(can_error.state, "Not synchronized to CAN bus", (sizeof(can_error.state) - 1));
+  else if ( (can_error.ESR1 & 0x400C8) == 0x40040 ) strncpy(can_error.state, "Transmitting", (sizeof(can_error.state) - 1));
+  else if ( (can_error.ESR1 & 0x400C8) == 0x40008 ) strncpy(can_error.state, "Receiving", (sizeof(can_error.state) - 1));
+
+  can_error.BIT1_ERR = (can_error.ESR1 & (1UL << 15)) ? 1 : 0;
+  can_error.BIT0_ERR = (can_error.ESR1 & (1UL << 14)) ? 1 : 0;
+  can_error.ACK_ERR = (can_error.ESR1 & (1UL << 13)) ? 1 : 0;
+  can_error.CRC_ERR = (can_error.ESR1 & (1UL << 12)) ? 1 : 0;
+  can_error.FRM_ERR = (can_error.ESR1 & (1UL << 11)) ? 1 : 0;
+  can_error.STF_ERR = (can_error.ESR1 & (1UL << 10)) ? 1 : 0;
+  can_error.TX_WRN = (can_error.ESR1 & (1UL << 9)) ? 1 : 0;
+  can_error.RX_WRN = (can_error.ESR1 & (1UL << 8)) ? 1 : 0;
+
+  if ( (can_error.ESR1 & 0x30) == 0x0 ) strncpy(can_error.FLT_CONF, "Error Active", (sizeof(can_error.FLT_CONF) - 1));
+  else if ( (can_error.ESR1 & 0x30) == 0x1 ) strncpy(can_error.FLT_CONF, "Error Passive", (sizeof(can_error.FLT_CONF) - 1));
+  else strncpy(can_error.FLT_CONF, "Bus off", (sizeof(can_error.FLT_CONF) - 1));
+
+  can_error.RX_ERR_COUNTER = (uint8_t)(can_error.ECR >> 8);
+  can_error.TX_ERR_COUNTER = (uint8_t)can_error.ECR;
+  NVIC_ENABLE_IRQ(nvicIrq);
+
+  return 1;
+}
 
 static void report_Frame(CAN_message_t *frame){
 	char msgString[80];
@@ -64,7 +186,7 @@ static void report_Frame(CAN_message_t *frame){
 						frame->buf[4],frame->buf[5],frame->buf[6],frame->buf[7]
 						);
 	report_message(msgString,-1);
-  char code[16];
+  char code[20];
   switch (FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, frame->mb)))
   {
   case 0: sprintf(code,"RX_INACTIVE");      break;
@@ -144,7 +266,7 @@ static bool add_buf (can_tx_buffer_t *buf, CAN_message_t *msg)
   bool result = true;
   nextEntry = (buf->head + 1) % buf->size;
   /* check if the ring buffer is full */
-  while (spin_lock);
+  // while (spin_lock);
   if (nextEntry == buf->tail) {
     protocol_enqueue_rt_command(canbus_execute_buf);
     system_set_exec_state_flag(EXEC_RT_COMMAND);
@@ -627,7 +749,7 @@ void canbus_execute_buf(sys_state_t state)
   // for (;;)
   // {
     for (int i = txBox ; i < FLEXCANb_MAXMB_SIZE(_bus); i++) {
-      if (txBox >= FLEXCANb_MAXMB_SIZE(_bus) || !(tx_buf.count) || !canbus_On) 
+      if (txBox >= FLEXCANb_MAXMB_SIZE(_bus) || !(tx_buf.count) /*|| !canbus_On*/) 
         break;
       CAN_message_t tx_msg;// = {0};
       remove_buf(&tx_buf,&tx_msg);
@@ -643,12 +765,87 @@ void canbus_execute_buf(sys_state_t state)
   spin_lock = false;
 }
 
+// void print_error(){
+//     got_error = false;
+//     uint32_t esr1;
+//     memcpy(&esr1,&last_esr1,sizeof(last_esr1));
+//     char c_status[35];
+//     if ( (esr1 & 0x400C8) == 0x40080 ) {
+//       // Serial.println("Idle");
+//       sprintf(c_status,"Idle");
+//     }
+//     else if ( (esr1 & 0x400C8) == 0x0 ) {
+//       // Serial.println("Not synchronized to CAN bus");
+//       sprintf(c_status,"Not synchronized to CAN bus");
+//     }
+//     else if ( (esr1 & 0x400C8) == 0x40040 ) {
+//       // Serial.println("Transmitting");
+//       sprintf(c_status,"Transmitting");
+//     }
+//     else if ( (esr1 & 0x400C8) == 0x40008 ) {
+//       // Serial.println("Receiving");
+//       sprintf(c_status,"Receiving");
+//     }
+//     char c_error[90];
+//     if ( esr1 & (1UL << 15) ) {
+//       // Serial.println("BIT1_ERR: At least one bit sent as recessive is received as dominant");
+//       sprintf(c_error,"BIT1_ERR: At least one bit sent as recessive is received as dominant");
+//     }
+//     if ( esr1 & (1UL << 14) ) {
+//       // Serial.println("BIT0_ERR: At least one bit sent as dominant is received as recessive");
+//       sprintf(c_error,"BIT0_ERR: At least one bit sent as dominant is received as recessive");
+//     }
+//     if ( esr1 & (1UL << 13) ) {
+//       // Serial.println("ACK_ERR: Indicates that an Acknowledge Error has been detected by the transmitter node");
+//       sprintf(c_error,"ACK_ERR: Indicates that an Acknowledge Error has been detected by the transmitter node");
+//     }
+//     if ( esr1 & (1UL << 12) ) {
+//       // Serial.println("CRC_ERR: Indicates that a CRC Error has been detected by the receiver node");
+//       sprintf(c_error,"CRC_ERR: Indicates that a CRC Error has been detected by the receiver node");
+//     }
+//     if ( esr1 & (1UL << 11) ) {
+//       // Serial.println("FRM_ERR: Indicates that a Form Error has been detected by the receiver node");
+//       sprintf(c_error,"FRM_ERR: Indicates that a Form Error has been detected by the receiver node");
+//     }
+//     if ( esr1 & (1UL << 10) ) {
+//       // Serial.println("STF_ERR: Indicates that a Stuffing Error has been detected");
+//       sprintf(c_error,"STF_ERR: Indicates that a Stuffing Error has been detected");
+//     }
+//     if ( esr1 & (1UL << 9) ) {
+//       // Serial.println("TX_WRN: Indicates when repetitive errors are occurring during message transmission");
+//       sprintf(c_error,"TX_WRN: Indicates when repetitive errors are occurring during message transmission");
+//     }
+//     if ( esr1 & (1UL << 8) ) {
+//       // Serial.println("RX_WRN: Indicates when repetitive errors are occurring during message reception");
+//       sprintf(c_error,"RX_WRN: Indicates when repetitive errors are occurring during message reception");
+//     }
+//     // Serial.print("FLT_CONF: ");
+//     // if ( (esr1 & 0x30) == 0x0 ) Serial.print("Error Active - ");
+//     // else if ( (esr1 & 0x30) == 0x1 ) Serial.print("Error Passive - ");
+//     // else Serial.print("Bus off - ");
+//     // Serial.println("Indicates the Confinement State of the FLEXCAN module");
+//     // Serial.println("Error Counter Registers (ECR):");
+//     // Serial.print(" --> RX_ERR_COUNTER: ");
+//     // Serial.println((uint8_t)(FLEXCANb_ECR(_bus) >> 8));
+//     // Serial.print(" --> TX_ERR_COUNTER: ");
+//     // Serial.println((uint8_t)FLEXCANb_ECR(_bus));
+//     char c_err_count[30];
+//     sprintf(c_err_count,"TX__ERR:%u RX_ERR:%u",(uint8_t)(FLEXCANb_ECR(_bus) >> 8),(uint8_t)FLEXCANb_ECR(_bus));
+//     // Serial.println("######################################################\n");
+//     char c_msg[180];
+//     sprintf(c_msg,"[CAN STATUS:%c\n%c\n%c]\r\n",c_status,c_error,c_err_count);
+//     hal.stream.write(c_msg);
+//     // hal.stream.write(ASCII_EOL);
+// }
+
 void canbus_events(uint_fast16_t state) {
   // UNUSED(state);
   // static int maxCount;
   int bufCount = tx_buf.count;
-  if (bufCount)
+  if (bufCount && !spin_lock)
     canbus_execute_buf(state);
+  if (got_error()) 
+    printErrors();
   // if (bufCount > maxCount){ 
     // maxCount = bufCount;
     // char msg_c[30];
@@ -779,6 +976,7 @@ void flexcan_interrupt(void) {
         // if (!result) add_buf(&tx_buf,&frame);
       }
       else {
+        (void)FLEXCANb_TIMER(_bus);
         writeIFLAGBit(mb_num); /* just clear IFLAG if no TX queues exist */
         mbxAddr[0] = FLEXCAN_MB_CS_CODE(FLEXCAN_MB_CODE_TX_INACTIVE); /* set it back to a TX mailbox */
       }
@@ -859,12 +1057,26 @@ void flexcan_interrupt(void) {
     // }
   }
       
-  uint32_t reg_esr = FLEXCANb_ESR1(_bus);
-  bool _state =  reg_esr&0x40000 && !(reg_esr&0xF000) && !(reg_esr&0x30) ? true : false; /* synch, no crc/ack/bit errors */
-  if (canbus_On != _state) 
-      canbus_On = _state;
+  // uint32_t reg_esr = FLEXCANb_ESR1(_bus);
+  // bool _state =  reg_esr&0x40000 && !(reg_esr&0xF000) && !(reg_esr&0x30) ? true : false; /* synch, no crc/ack/bit errors */
+  // if (canbus_On != _state) 
+  //     canbus_On = _state;
 
-  FLEXCANb_ESR1(_bus) |= reg_esr;
+  // FLEXCANb_ESR1(_bus) |= reg_esr;
+
+  uint32_t esr1 = FLEXCANb_ESR1(_bus);
+  static uint32_t last_esr1 = 0;
+  if ( (last_esr1 & 0x7FFBF) != (esr1 & 0x7FFBF) ) {
+    if ( busESR1.count < busESR1.size ) {
+      uint_fast16_t next = busESR1.head+1 >= busESR1.size ? 0 : busESR1.head+1;
+      busESR1.data[busESR1.head] = esr1;
+      busESR1.data_ECR[busESR1.head] = (uint16_t)(FLEXCANb_ECR(_bus));
+      last_esr1 = esr1;
+      busESR1.count++;
+      busESR1.head = next;
+    }
+  }
+  FLEXCANb_ESR1(_bus) |= esr1;
   asm volatile ("dsb");	
 }
 
@@ -907,7 +1119,8 @@ void can_init() {
   for (uint8_t i = 0; i < SIZE_LISTENERS; i++) {listener[i] = 0;}
   if ( !getClock() ) 
     setClock(CLK_24MHz); /* no clock enabled, enable osc clock */
-  FLEXCANb_MCR(_bus) &= ~FLEXCAN_MCR_MDIS; /* enable module */
+  FLEXCAN2.MCR &= ~FLEXCAN_MCR_MDIS;
+  // FLEXCANb_MCR(_bus) &= ~FLEXCAN_MCR_MDIS; /* enable module */
   FLEXCAN_EnterFreezeMode();
   FLEXCANb_CTRL1(_bus) |= FLEXCAN_CTRL_LOM; /* listen only mode */
   FLEXCANb_MCR(_bus) |= FLEXCAN_MCR_FRZ; /* enable freeze bit */
@@ -923,10 +1136,11 @@ void can_init() {
   FLEXCANb_MCR(_bus) |= FLEXCAN_MCR_WAK_SRC; // WAKE-UP LOW-PASS FILTER
   FLEXCANb_MCR(_bus) &= ~0x8800; // disable DMA and FD (valid bits are reserved in legacy controllers)
 
+  FLEXCANb_CTRL1(_bus) |= FLEXCAN_CTRL_BOFF_REC;
   // FLEXCANb_CTRL2(_bus) |= FLEXCAN_CTRL2_RRS; // store remote frames
   FLEXCANb_CTRL2(_bus) |= FLEXCAN_CTRL2_EACEN; /* handles the way filtering works. Library adjusts to whether you use this or not */ 
   FLEXCANb_CTRL2(_bus) |= FLEXCAN_CTRL2_MRP; // mailbox > FIFO priority.
-  // FLEXCANb_MCR(_bus) |= FLEXCAN_MCR_WRN_EN;
+  FLEXCANb_MCR(_bus) |= FLEXCAN_MCR_WRN_EN;
   FLEXCANb_MCR(_bus) |= FLEXCAN_MCR_WAK_MSK;
  
   enableFIFO(0); /* clears all data and layout to legacy mailbox mode */
@@ -957,9 +1171,9 @@ void canbus_begin(_MB_ptr handler, uint32_t baudrate) {
   enableFIFOInterrupt(1);
 }
 
-bool canbus_connected() {
-  return canbus_On;
-}
+// bool canbus_connected() {
+//   return canbus_On;
+// }
 
 CAN_sync_message_t *canbus_write_sync_msg(CAN_message_t *msg, bool enable){
   if (!enable){
@@ -990,12 +1204,14 @@ CAN_sync_message_t *canbus_write_sync_msg(CAN_message_t *msg, bool enable){
 
 int canbus_write_blocking(CAN_message_t *msg, bool block)
 {
+  // if (!hal.stream.connected)
+  //   return;
   if (!block){
     return add_buf(&tx_buf,msg) ? 2 : 0;
   }
   // find an available buffer
   int buffer = 0;
-  // while (spin_lock);
+  while (spin_lock);
   for ( int index = getFirstTxBox(); ; ) {
     uint32_t mb_code = FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, index));
     if ((mb_code == FLEXCAN_MB_CODE_TX_INACTIVE) || (mb_code == FLEXCAN_MB_CODE_RX_EMPTY)) {

@@ -5,7 +5,7 @@
 
 #include <stdio.h>
 #include "can.h"
-// #include "../oled/oled.h"
+#include "pca9685.h"
 #include "../grbl/hal.h"
 #include "../grbl/override.h"
 #include "../grbl/protocol.h"
@@ -194,7 +194,7 @@ typedef enum odrive_mcode_t{
     Odrive_Clear_Errors,
     Odrive_Request_State,
 	Odrive_Report_Stats,// = UserMCode_Generic2, //102
-
+	Odrive_Set_Fan,
     // UserMCode_Generic3 = 103,
     // UserMCode_Generic4 = 104,
 } odrive_mcode_t;
@@ -233,21 +233,44 @@ typedef struct encoder_frame_timer_t{
 	volatile uint32_t frame_time_us;
 } encoder_frame_timer_t;
 
-typedef enum fan_state{ //Fan_state
-	FAN_IDLE,
-	FAN_START,
-	FAN_ON,
-    FAN_WAIT_STOP,
-	FAN_STOP
-}fan_state;
+typedef struct {
+  uint16_t  active_speed,    // 0-4096 (fullspeed); Speed with enabled Spindle
+            idle_speed;      // 0-4096 (fullspeed); Speed after idle period with Spindle disabled
+  uint16_t  duration;        // Duration in seconds for the fan to run after Spindle disabled
+  bool      auto_mode;       // Default true
+  uint16_t  full_speed_temp; // Full speed at this temperatur in auto_mode
+  uint8_t 	pwm_channel; 	 // I2C PWM(PCA9685) Fan channel 0-16
+} Fan_settings_t;
 
 typedef struct fan_t{ //Fan
-    uint16_t value;
-	uint16_t last_value;
-    uint8_t state;
+    enum fan_state_t{
+		FAN_IDLE,
+		FAN_ACTIVE,
+		FAN_START,
+		FAN_STOP,
+		FAN_WAIT_STOP,
+    	FAN_DURATION
+	}state;
+	uint16_t speed;
     uint8_t last_state;
     uint16_t last_temperatur;
-}fan_t;
+	Fan_settings_t *settings;
+}Fan_t;
+
+#define FAN_SPEED_ACTIVE 	1400
+#define FAN_SPEED_IDLE     	0
+#define FAN_IDLE_TIME     	60
+#define FAN_FULL_SPEED_TEMP 50
+#define FAN_PWM_CHANNEL			0
+
+static Fan_settings_t Fan_settings = {
+  FAN_SPEED_ACTIVE,
+  FAN_SPEED_IDLE,
+  FAN_IDLE_TIME,
+  true,
+  FAN_FULL_SPEED_TEMP,
+  FAN_PWM_CHANNEL
+};
 
 typedef union flag_t{
     struct {
@@ -261,13 +284,6 @@ typedef union flag_t{
                 temperatur_error :1;
     };
 } flag_t;
-
-// typedef enum rpm_diff_state_t{
-// 	DIFF_IDLE,
-// 	DIFF_OVR_ON,
-// 	DIFF_STATE_HOLD,
-// 	DIFF_RESTORE,
-// }rpm_diff_state_t;
 
 typedef struct rpm_diff_t{
 	enum rpm_diff_state_t{
@@ -288,23 +304,20 @@ typedef struct rpm_diff_t{
 
 typedef struct periodic_frame_t {
     volatile bool active;
-    // uint8_t node_id;
 	uint8_t cmd_id;
     uint16_t interval;
 	uint32_t last;
-    // struct periodic_frame_t *next;
 }periodic_frame_t; 
 
 static periodic_frame_t frames_periodic[] = {
-        {On, MSG_GET_VBUS_VOLTAGE, 			100, 0 },
-        {Off, MSG_GET_ENCODER_ESTIMATES,	5, 0},
-        {On, MSG_GET_ENCODER_COUNT,  		5, 0},
-        {On, MSG_GET_TEMPERATURE, 			500, 0}
+        {On, MSG_GET_VBUS_VOLTAGE, 			150, 0 },
+        // {Off, MSG_GET_ENCODER_ESTIMATES,	5, 0},
+        {On, MSG_GET_ENCODER_COUNT,  		20, 0},
+        {On, MSG_GET_TEMPERATURE, 			100, 0}
 };
-static periodic_frame_t *encoder_estimates_frame = NULL;
 
 static axis_parameters_t sp_axis ={0};
-// static fan_t sp_fan = {0};
+static Fan_t fan = {.settings=&Fan_settings};
 static flag_t flag = {0};
 static rpm_diff_t diff = {0};
 
@@ -349,11 +362,12 @@ int odrive_set_state(uint8_t axis_state, bool block){
     CAN_message_t out = {0};
 	out.id = set_msg_id(MSG_SET_AXIS_REQUESTED_STATE,odrive.can_node_id);
 	out.len = 4;
-	out.buf[0] = axis_state;
-	out.buf[1] = 0;
-	out.buf[2] = 0;
-	out.buf[3] = 0;
-	out.high = 0;
+	out.low = axis_state;
+	// out.buf[0] = axis_state;
+	// out.buf[1] = 0;
+	// out.buf[2] = 0;
+	// out.buf[3] = 0;
+	// out.high = 0;
 	return canbus_write_blocking(&out, block);
 }
 
@@ -372,13 +386,13 @@ void odrive_get_parameter(uint8_t cmd, bool block){
 
 void odrive_set_input_vel(float vel, bool block){
 	if (!sp_axis.isAlive){
-		sprintf(msg_warning,"INPUT VEL fail! id:%d vel:%.2f odrvAlive:%d can:%d",odrive.can_node_id,vel,sp_axis.isAlive,(uint8_t)canbus_connected());
-		report_message(msg_warning,Message_Warning);
-		memset(&msg_warning,0,sizeof(msg_warning));
+		// sprintf(msg_warning,"INPUT VEL fail! id:%d vel:%.2f odrvAlive:%d can:%d",odrive.can_node_id,vel,sp_axis.isAlive,(uint8_t)canbus_connected());
+		// report_message(msg_warning,Message_Warning);
+		// memset(&msg_warning,0,sizeof(msg_warning));
 		return;
 	}
-	if (msg_debug[0] == '\0')
-		sprintf(msg_debug,"spindle_update rpm=%.0f vel=%.2f", sp_data.rpm_programmed, vel);
+	// if (msg_debug[0] == '\0')
+		// sprintf(msg_debug,"spindle_update rpm=%.0f vel=%.2f", sp_data.rpm_programmed, vel);
 		
 	CAN_message_t out = {0};
 	out.id = set_msg_id(MSG_SET_INPUT_VEL,odrive.can_node_id);
@@ -392,8 +406,8 @@ void odrive_set_input_vel(float vel, bool block){
 
 int odrive_set_limits(float vel, float cur, bool block){
 	if (!sp_axis.isAlive){
-		sprintf(msg_feedback,"SET LIMITS fail! id:%d odrvAlive:%d can:%d",odrive.can_node_id,sp_axis.isAlive,(uint8_t)canbus_connected());
-		report_feedback;
+		// sprintf(msg_feedback,"SET LIMITS fail! id:%d odrvAlive:%d can:%d",odrive.can_node_id,sp_axis.isAlive,(uint8_t)canbus_connected());
+		// report_feedback;
 		return 0;
 	}    
 	CAN_message_t out = {0};
@@ -437,7 +451,7 @@ void cb_gotFrame(CAN_message_t *frame, int mb){
 			sp_axis.isAlive = On;
 			hal.spindle.get_data = *spindleGetData;
 			report_message("CAN connected",Message_Info);
-			odrive_set_limits(odrive.controller_vel_limit,odrive.motor_current_limit,false);
+			// odrive_set_limits(odrive.controller_vel_limit,odrive.motor_current_limit,false);
 		}
     	// bool a_err = sp_axis.error.axis, c_err = sp_axis.error.controller, m_err = sp_axis.error.motor, e_err = sp_axis.error.encoder;
 		// sprintf(msg_feedback,"Frame hBeat state:%u error:%u ax:%u co:%u mo:%u en:%u buf: %02x%02x%02x%02x",
@@ -482,10 +496,10 @@ void cb_gotFrame(CAN_message_t *frame, int mb){
                     // ((float)(sp_data.pulse_count) * (1.0f / odrive.encoder_cpr));
                             //  (pulse_length == 0 ? 0.0f : (float)rpm_timer_delta / (float)pulse_length)) *
   	  	// static uint32_t next_print = 0;
-		static int_fast32_t last_cpr = {0}, last_pos = {0};
-		if ( /*next_print <= hal.get_elapsed_ticks() || */ last_pos != (int_fast32_t)sp_axis.count_pos && sp_axis.axis_state == AXIS_STATE_IDLE){
-			last_cpr = (int_fast32_t)sp_axis.count_cpr;
-			last_pos = (int_fast32_t)sp_axis.count_pos;
+		// static int_fast32_t last_cpr = {0}, last_pos = {0};
+		// if ( /*next_print <= hal.get_elapsed_ticks() || */ last_pos != (int_fast32_t)sp_axis.count_pos && sp_axis.axis_state == AXIS_STATE_IDLE){
+			// last_cpr = (int_fast32_t)sp_axis.count_cpr;
+			// last_pos = (int_fast32_t)sp_axis.count_pos;
 			// next_print = hal.get_elapsed_ticks() + 1000;
 			// if (!msg_debug[0]){
 				// sprintf(msg_debug,"cpr:%04i pos:%i", 
@@ -493,7 +507,7 @@ void cb_gotFrame(CAN_message_t *frame, int mb){
 				// report_message(msg_debug,Message_Info);
 			// }
 			// encoder_timer.frame_time_us = -1;
-		}
+		// }
   	  	break;}
   	case MSG_GET_ENCODER_ESTIMATES:{
   	    memcpy(&sp_axis.pos_estimate, &frame->low, sizeof(sp_axis.pos_estimate));
@@ -524,6 +538,66 @@ void cb_gotFrame(CAN_message_t *frame, int mb){
 
 //-------------------------------------------------------------------------------------
 
+uint16_t map_fan_value(){
+	uint16_t temp = max(fan.last_temperatur,fan.settings->full_speed_temp);
+	float seq = (float)(4096.0f - fan.settings->active_speed) / (float)(fan.settings->full_speed_temp - 25.0f);
+	return (uint16_t)(seq * (temp - 25));
+}
+
+void handle_cooling(void){
+	bool handle = false;
+	static uint32_t aftercooling_start, next_check;
+	static uint16_t last_speed;
+	uint32_t ms = hal.get_elapsed_ticks();
+	if (ms < next_check)
+		return;
+	next_check = ms + 2000;
+	if (fan.last_temperatur != (uint16_t)sp_axis.temp_motor){
+		fan.last_temperatur = (uint16_t)sp_axis.temp_motor;
+		handle = On;
+	}
+	else if (fan.last_state != fan.state){
+		fan.last_state = fan.state;
+		handle = On;
+	}
+	if (!handle) return;
+	uint8_t state = fan.state;
+	switch (state)
+	{
+	case FAN_IDLE:{
+		fan.speed = 0;
+		break;}
+	case FAN_START:{
+		fan.speed = map_fan_value();
+		aftercooling_start = 0;
+		fan.state = FAN_ACTIVE;
+		break;}
+	case FAN_STOP:{
+		aftercooling_start = ms;//1000 * fan.settings->duration;
+		fan.state = FAN_WAIT_STOP;
+		break;}
+	case FAN_WAIT_STOP:{
+		bool time_over = ms >= aftercooling_start + (fan.settings->duration * 1000);
+		if (time_over || sp_axis.temp_motor < 28.0f) {
+			aftercooling_start = 0;
+			fan.state = FAN_IDLE;
+			fan.speed = 0;
+		}
+		else 
+			fan.speed = map_fan_value();
+		break;}
+	case FAN_ACTIVE:{
+		fan.speed = map_fan_value();
+		break;}
+	default:
+		break;
+	}
+	if (last_speed != fan.speed){
+		last_speed = fan.speed;
+		pca9685_pwm_set_duty(fan.settings->pwm_channel,fan.speed);
+	}
+}
+
 void spindle_rpm_diff(sys_state_t state){
 	uint32_t ms = hal.get_elapsed_ticks();
 	// static uint16_t org_enc_cound_period = {0};
@@ -543,7 +617,7 @@ void spindle_rpm_diff(sys_state_t state){
 		case DIFF_IDLE:
 			if (ovr_cur_active && sp_axis.lim_current == 0.0f){
 				if (sp_axis.lim_current == 0.0f){
-					odrive_get_parameter(MSG_SET_LIMITS,true);
+					odrive_get_parameter(MSG_SET_LIMITS,false);
 				}
 				return;
 			}
@@ -680,14 +754,16 @@ static void spindle_update(void){
 static void spindle_on(sys_state_t state){
 	if (!sp_axis.isAlive) return;
 	
-	if (odrive.motor_current_limit > 0.0f && sp_axis.lim_current != odrive.motor_current_limit){
-		sp_axis.lim_current = 0.0f;
-		odrive_set_limits(sp_axis.lim_vel, odrive.motor_current_limit,true);
-	}
+	fan.state = FAN_START;
+	// if (odrive.motor_current_limit > 0.0f && sp_axis.lim_current != odrive.motor_current_limit){
+	// 	sp_axis.lim_current = 0.0f;
+	// 	odrive_set_limits(sp_axis.lim_vel, odrive.motor_current_limit,true);
+	// }
 	
 	if (sp_axis.axis_state == AXIS_STATE_IDLE){
 		odrive_set_state(AXIS_STATE_CLOSED_LOOP_CONTROL,true);
 	}
+
 	// else {
 	// 	static uint32_t _timeout = 0;
 	// 	_timeout = !_timeout ? hal.get_elapsed_ticks() : _timeout;
@@ -698,14 +774,15 @@ static void spindle_on(sys_state_t state){
 static void spindle_off(sys_state_t state){
 	if(!sp_axis.isAlive) return;
 	
-	if(!flag.wait_off)
+	if(!flag.wait_off){
 		flag.wait_off = On;
-	
-	bool running = sp_data.rpm > 50.0f;
+		fan.state = FAN_STOP;
+	}
+	bool running = sp_data.rpm > 20.0f;
 	if (!running){
 		flag.wait_off = Off;
 		if (sp_axis.axis_state != AXIS_STATE_STARTUP_SEQUENCE && sp_axis.axis_state != AXIS_STATE_IDLE)
-			odrive_set_state(AXIS_STATE_IDLE,true);
+			odrive_set_state(AXIS_STATE_IDLE,false);
 	}
 	else
 		protocol_enqueue_rt_command(spindle_off);
@@ -722,6 +799,35 @@ static void spindleUpdateRPM(float rpm)
         sp_data.rpm_low_limit = rpm == 0.0f ? 0.0f : rpm / (1.0f + rpm_tol);
         sp_data.rpm_high_limit = rpm == 0.0f ? 0.0f : rpm * (1.0f + rpm_tol);
 	}
+	// if(sp_axis.axis_state != AXIS_STATE_CLOSED_LOOP_CONTROL) {
+    //     float delay = 0.0f;
+    //     while(sp_axis.axis_state != AXIS_STATE_CLOSED_LOOP_CONTROL) {
+    //         delay_sec(0.1f, DelayMode_Dwell);
+    //         delay += 0.1f;
+    //         if(ABORTED)
+    //             return;
+    //         if(delay >= SAFETY_DOOR_SPINDLE_DELAY) {
+    //             system_raise_alarm(Alarm_Spindle);
+    //             return;
+    //         }
+    //     }
+    // }
+
+	// if(rpm > 0.0f && sp_axis.axis_state != AXIS_STATE_CLOSED_LOOP_CONTROL) {
+    //     float delay = 0.0f;
+    //     while(sp_axis.axis_state != AXIS_STATE_CLOSED_LOOP_CONTROL) {
+    //         delay_sec(0.1f, DelayMode_Dwell);
+    //         delay += 0.1f;
+    //         if(ABORTED)
+    //             break;
+    //         if(delay >= SAFETY_DOOR_SPINDLE_DELAY) {
+    //             system_raise_alarm(Alarm_Spindle);
+    //             break;
+    //         }
+    //     }
+    // }
+	// if (sp_axis.isAlive && sp_axis.axis_state == AXIS_STATE_UNDEFINED)
+		// report_error_details();
   	spindle_update();
 }
 
@@ -854,7 +960,7 @@ void sp_rt_report(stream_write_ptr stream_write, report_tracking_flags_t report)
 	if(on_realtime_report)
         on_realtime_report(stream_write, report);
 
-	if (report.motor || !sp_counter){
+	if (sp_axis.isAlive && !sp_counter){
 		stream_write("|ODRV:");
     	sprintf(rt_report_msg,"%2.1f,%4.3f,%3.1f",sp_axis.temp_motor > 0.0f ? sp_axis.temp_motor : sp_axis.temp_fet,
 												sp_axis.ibus, sp_axis.ibus > 0.0f ? sp_axis.ibus * sp_axis.vbus : 0.0f);
@@ -866,15 +972,14 @@ void sp_rt_report(stream_write_ptr stream_write, report_tracking_flags_t report)
 
 void sp_ms_event(){
 	uint32_t ms = hal.get_elapsed_ticks();
-	static uint32_t last_1ms = 0, last_50ms = 0;
+	static uint32_t last_1ms = 0, last_50ms = 0, last_250ms = 0;
 
 	if (ms >= last_1ms + 1){
 		last_1ms = ms;
 	
   
 	}
-
-	if (ms >= last_50ms + 50){
+	else if (ms >= last_50ms + 50){
 		last_50ms = ms;
 		// if(diff.state != DIFF_IDLE && sp_axis.isAlive) {
 		// 	// if (flag.got_rpm_diff){
@@ -885,27 +990,21 @@ void sp_ms_event(){
 		// 	// }
 		// }
 	}
+	else if (ms >= last_250ms + 250){
+		last_250ms = ms;
+		// char c_msg[70];
+		// sprintf(c_msg,"SP_State on=%u RPM: soll=%.0f ist=%.0f atS=%d waitACC=%d",
+		// 	sp_state.on, sp_data.rpm_programmed, sp_data.rpm, sp_state.at_speed, flag.wait_accel);
+		// report_message(c_msg,Message_Plain);
+	}
 }
 
 void sp_execute_realtime(uint_fast16_t state){
-	static uint32_t last_ms, last_50ms;
+	static uint32_t last_ms;
 	on_execute_realtime(state);
     UNUSED(state);
     uint32_t ms = hal.get_elapsed_ticks();
-	
-	
-	// periodic_frame_t *sent_msg = next_frame;
-	// next_frame = sent_msg->next;
-	// if(sent_msg->active && (ms >= (sent_msg->last + sent_msg->interval))) {
-	// 	sent_msg->last = ms;
-	// 	odrive_get_parameter(sent_msg->cmd_id,false);
-	// }
-	
-	if (ms >= last_50ms + 50){
-		last_50ms = ms;
-
-	}
-    
+		
 	if (ms == last_ms)
 		return;
 	
@@ -920,14 +1019,17 @@ void sp_execute_realtime(uint_fast16_t state){
 	if (diff.state != DIFF_IDLE)
 		spindle_rpm_diff(state);
 
-	if (sp_axis.isAlive){
+	if (sp_axis.isAlive /*&& hal.stream.connected*/){
 
 		for(uint8_t idx = 0; idx < (sizeof(frames_periodic) / sizeof(periodic_frame_t)); idx++){
 			if(frames_periodic[idx].active && (ms >= (frames_periodic[idx].last + frames_periodic[idx].interval))) {
-				odrive_get_parameter(frames_periodic[idx].cmd_id,true);
+				odrive_get_parameter(frames_periodic[idx].cmd_id,false);
 				frames_periodic[idx].last = ms;
+				// break;
 			}
 		}
+
+		handle_cooling();
 
 		if ((ms - sp_axis.last_heartbeat) > odrive.can_timeout){
 			sp_axis.isAlive = false;
@@ -938,7 +1040,7 @@ void sp_execute_realtime(uint_fast16_t state){
 		}
 		
 	}
-
+	
 	// sp_ms_event();
 
 	// if (sp_axis.isAlive){
@@ -1035,7 +1137,7 @@ static user_mcode_t userMCodeCheck (user_mcode_t mcode)
 {
     return (uint32_t)mcode == Odrive_Set_Current_Limit || (uint32_t)mcode == Odrive_Reboot || 
 				(uint32_t)mcode == Odrive_Report_Stats || (uint32_t)mcode == Odrive_Clear_Errors ||
-            	(uint32_t)mcode == Odrive_Request_State 
+            	(uint32_t)mcode == Odrive_Request_State || (uint32_t)mcode == Odrive_Set_Fan
 			? mcode
             : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Ignore);
 }
@@ -1065,11 +1167,25 @@ static status_code_t userMCodeValidate (parser_block_t *gc_block, parameter_word
 				state = Status_GcodeValueOutOfRange;
 			else {
 				(*value_words).s = Off;
-           		gc_block->user_mcode_sync = true;
+           		// gc_block->user_mcode_sync = true;
 			}            
             break;}
 
-        case Odrive_Reboot:
+        case Odrive_Set_Fan:{
+			state = Status_OK;
+         	if((*value_words).s && isnan(gc_block->values.s))
+             	state = Status_BadNumberFormat;
+			else if((*value_words).f && isnan(gc_block->values.f))
+				state = Status_BadNumberFormat;
+			// else if (isnan(gc_block->values.s) || isnan(gc_block->values.f))
+			// 	state = Status_GcodeValueOutOfRange;
+			else {
+				(*value_words).s = Off;
+				(*value_words).f = Off;
+           		// gc_block->user_mcode_sync = true;
+			}            
+            break;}
+		case Odrive_Reboot:
 		case Odrive_Clear_Errors:
         case Odrive_Report_Stats:
             state = Status_OK;
@@ -1116,6 +1232,13 @@ static void userMCodeExecute (uint_fast16_t state, parser_block_t *gc_block)
             	hal.stream.write("OK" ASCII_EOL);
 			else
 				hal.stream.write("FAIL" ASCII_EOL);
+            break;}
+			
+		case Odrive_Set_Fan:{
+			char msg[30];
+            sprintf(msg,"ODrive set Fan %u val %u ",(uint8_t)gc_block->values.f, (uint16_t)gc_block->values.s);
+			hal.stream.write(msg);
+			pca9685_pwm_set_duty((uint8_t)gc_block->values.f,(uint16_t)gc_block->values.s);
             break;}
 
         case Odrive_Report_Stats:{
@@ -1167,17 +1290,18 @@ static void odrive_settings_changed (settings_t *settings)
 		// if(spindle_encoder.ppr != settings->spindle.ppr) {
         // hal.spindle.reset_data = spindleDataReset;
         // hal.spindle.set_state((spindle_state_t){0}, 0.0f);
-        pidf_init(&spindle_tracker.pid, &settings->position.pid);
-        float timer_resolution = 1.0f / 1000000.0f; // 1 us resolution
-        spindle_tracker.min_cycles_per_tick = (int32_t)ceilf(settings->steppers.pulse_microseconds * 2.0f + settings->steppers.pulse_delay_microseconds);
-        spindle_encoder.ppr = settings->spindle.ppr;
+        // pidf_init(&spindle_tracker.pid, &settings->position.pid);
+        // float timer_resolution = 1.0f / 1000000.0f; // 1 us resolution
+        // spindle_tracker.min_cycles_per_tick = (int32_t)ceilf(settings->steppers.pulse_microseconds * 2.0f + settings->steppers.pulse_delay_microseconds);
+        // spindle_encoder.ppr = settings->spindle.ppr;
         // spindle_encoder.tics_per_irq = max(1, spindle_encoder.ppr / 32);
-        spindle_encoder.pulse_distance = 1.0f / spindle_encoder.ppr;
+        // spindle_encoder.pulse_distance = 1.0f / spindle_encoder.ppr;
         // spindle_encoder.maximum_tt = (uint32_t)(2.0f / timer_resolution) / spindle_encoder.tics_per_irq;
-        spindle_encoder.rpm_factor = 60.0f / ((timer_resolution * (float)spindle_encoder.ppr));
-        spindleDataReset();
+        // spindle_encoder.rpm_factor = 60.0f / ((timer_resolution * (float)spindle_encoder.ppr));
+        // spindleDataReset();
         // }
 		canbus_begin(0,1000*odrive.can_baudrate);
+		pca9685_init();
 	}
 
     init_ok = true;
@@ -1186,11 +1310,12 @@ static void odrive_settings_changed (settings_t *settings)
 static void reset(){
 
 	// init_ok = false;
-	sp_axis = (axis_parameters_t){0};
+	// sp_axis = (axis_parameters_t){0};
 	// sp_data = (spindle_data_t){0};
 	// sp_state = (spindle_state_t){0};
-	flag = (flag_t){0};
+	// flag = (flag_t){0};
 	// diff = (rpm_diff_t){0};
+	fan.state = FAN_STOP;
     driver_reset();
 }
 
@@ -1231,14 +1356,12 @@ void odrive_init()
 		odrive_settings_changed(&settings);
 
 		// next_frame = &frames_periodic[0];
+		// canbus_init();
 
     	for(uint8_t idx = 0; idx < (sizeof(frames_periodic) / sizeof(periodic_frame_t)); idx++){
-			// frames_periodic[idx].next = idx == (sizeof(frames_periodic) / sizeof(periodic_frame_t)) - 1 ? &frames_periodic[0] : &frames_periodic[idx + 1];
 			frames_periodic[idx].last = 0UL;
-			// frames_periodic[idx].node_id = odrive.can_node_id;
-			// frames_periodic[idx].active = false;
-			if (frames_periodic[idx].cmd_id == MSG_GET_ENCODER_ESTIMATES)
-				encoder_estimates_frame = &frames_periodic[idx];
+			// if (frames_periodic[idx].cmd_id == MSG_GET_ENCODER_ESTIMATES)
+				// encoder_estimates_frame = &frames_periodic[idx];
 		}
 
 		odrv_listener.generalCallbackActive = On;
