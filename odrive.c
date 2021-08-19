@@ -15,7 +15,6 @@
 #include "../grbl/settings.h"
 #include "grbl/spindle_sync.h"
 
-
 //------------------------------------------Odrive Settings----------------------------------
 
 typedef enum odrive_settings_type_t{  // Odrive Settings type
@@ -33,11 +32,37 @@ typedef enum odrive_settings_type_t{  // Odrive Settings type
     Settings_Odrive_gear_spindle,
 	Settings_Odrive_ovr_feed,
 	Settings_Odrive_ovr_curit,
-    // Settings_Odrive_cooling_after_time,
-    // Settings_Odrive_cooling_temp_0,
-    // Settings_Odrive_cooling_temp_100,
+    Settings_Odrive_fan_speed_start,
+    Settings_Odrive_fan_start_speed_temp,
+    Settings_Odrive_fan_full_speed_temp,
+    Settings_Odrive_fan_duration,
+    Settings_Odrive_fan_pwm_channel,
     Settings_Odrive_Settings_Max
 }odrive_settings_type_t;
+
+typedef struct {
+  uint16_t  start_speed;    // 0-4096 (fullspeed); Speed with enabled Spindle
+  uint16_t  duration;        // Duration in seconds for the fan to run after Spindle disabled
+  uint16_t  full_speed_temp; // Full speed at this temperatur in auto_mode
+  uint16_t  start_speed_temp; // Full speed at this temperatur in auto_mode
+  uint8_t 	pwm_channel; 	 // I2C PWM(PCA9685) Fan channel 0-16
+} fan_settings_t;
+
+typedef struct fan_t{ //Fan
+    enum fan_state_t{
+		FAN_IDLE,
+		FAN_ACTIVE,
+		FAN_START,
+		FAN_STOP,
+		FAN_WAIT_STOP,
+    	FAN_RESET
+	}state;
+	uint16_t speed;
+    uint8_t last_state;
+    float last_temp;
+    float *temp;
+	fan_settings_t *settings;
+}fan_t;
 
 typedef struct odrive_settings_t{ // Odrive Settings
     bool use_ratio;          // Use Gear Ratio
@@ -52,17 +77,57 @@ typedef struct odrive_settings_t{ // Odrive Settings
 	float controller_vel_integrator_gain;
     uint16_t gear_motor;          // Gear at Motor shaft
     uint16_t gear_spindle;          // Gear at Spindle shaft
-    // uint16_t cooling_after_time;  // Time in seconds spindle cooling after spindle stop
-    // uint16_t fan_temp_0;      // Temperatur 0% = value C°
-    // uint16_t fan_temp_100;    // Temperatur 100% = value C°
-    // uint16_t load_max;        // Max Load value
 	bool ovr_feed;
 	float ovr_cur;
+	fan_settings_t fan_settings;
 } odrive_settings_t;
+
+typedef struct axis_parameters_t{
+    uint8_t axis_state;
+	union error{
+    	uint8_t value;
+    	struct {
+        uint8_t  axis       :1,
+                 controller :1,
+                 motor      :1,
+                 encoder    :1,
+                 unassigned	:4;
+    	};
+	} error;
+    bool isAlive;
+    int32_t count_pos;
+    int32_t count_cpr;
+    float pos_estimate;
+    float vel_estimate;
+    float vbus;
+    float ibus;
+    float temp_fet;
+    float temp_motor;
+	float lim_current;
+	float lim_vel;
+    uint32_t last_heartbeat;
+    uint8_t last_state;
+}axis_parameters_t;
+
+#define DEFAULT_FAN_START_SPEED 		1200
+#define DEFAULT_FAN_DURATION     		60
+#define DEFAULT_FAN_FULL_SPEED_TEMP 	45
+#define DEFAULT_FAN_START_SPEED_TEMP 	25
+#define DEFAULT_FAN_PWM_CHANNEL			0
+
+// static Fan_settings_t fan_settings = {
+//   DEFAULT_FAN_SPEED_ACTIVE,
+//   DEFAULT_FAN_SPEED_IDLE,
+//   DEFAULT_FAN_IDLE_TIME,
+//   DEFAULT_FAN_FULL_SPEED_TEMP,
+//   DEFAULT_FAN_PWM_CHANNEL
+// };
 
 static nvs_address_t nvs_address;
 static settings_changed_ptr settings_changed;
 static odrive_settings_t odrive;
+static axis_parameters_t sp_axis;;
+static fan_t fan = {.settings=&odrive.fan_settings,.temp=&sp_axis.temp_motor};
 
 static const setting_group_detail_t odrive_groups [] = {
     { Group_Spindle, Group_All, "Spindle ODrive"},
@@ -83,6 +148,11 @@ static const setting_detail_t odrive_settings[] = {
     { Settings_Odrive_gear_spindle, Group_Spindle, "Odrive Gear on Spindle", "T", Format_Int8, "#0", "0", "255", Setting_NonCore, &odrive.gear_spindle, NULL, NULL },
     { Settings_Odrive_ovr_feed, Group_Spindle, "Odrive override FEED on err", NULL, Format_Bool, NULL, NULL, NULL, Setting_NonCore, &odrive.ovr_feed, NULL, NULL },
     { Settings_Odrive_ovr_curit, Group_Spindle, "Odrive override CURRENT on err", "0=Off", Format_Decimal, "#0.00", "0.0", "5.0", Setting_NonCore, &odrive.ovr_cur, NULL, NULL },
+    { Settings_Odrive_fan_speed_start, Group_Spindle, "Spindle FAN start speed", NULL, Format_Int16, "###0", "0", "4096", Setting_NonCore, &odrive.fan_settings.start_speed, NULL, NULL },
+    { Settings_Odrive_fan_start_speed_temp, Group_Spindle, "Spindle FAN start speed temp", "C", Format_Int16, "##0", "0", "100", Setting_NonCore, &odrive.fan_settings.start_speed_temp, NULL, NULL },
+    { Settings_Odrive_fan_full_speed_temp, Group_Spindle, "Spindle FAN full speed temp", "C", Format_Int16, "##0", "0", "100", Setting_NonCore, &odrive.fan_settings.full_speed_temp, NULL, NULL },
+    { Settings_Odrive_fan_duration, Group_Spindle, "Spindle FAN cooling duration", "sec", Format_Int16, "##0", "0", "600", Setting_NonCore, &odrive.fan_settings.duration, NULL, NULL },
+    { Settings_Odrive_fan_pwm_channel, Group_Spindle, "Spindle FAN pwm channel", NULL, Format_Int8, "#0", "0", "12", Setting_NonCore, &odrive.fan_settings.pwm_channel, NULL, NULL },
 };
 
 static void odrive_settings_save (void)
@@ -106,7 +176,11 @@ static void odrive_settings_restore (void)
 	odrive.gear_spindle = DEFAULT_ODRIVE_GEAR_2;
 	odrive.ovr_feed = true;
 	odrive.ovr_cur = 0.0f;
-
+	odrive.fan_settings.start_speed = DEFAULT_FAN_START_SPEED;
+	odrive.fan_settings.start_speed_temp = DEFAULT_FAN_START_SPEED_TEMP;
+	odrive.fan_settings.full_speed_temp = DEFAULT_FAN_FULL_SPEED_TEMP;
+	odrive.fan_settings.duration = DEFAULT_FAN_DURATION;
+	odrive.fan_settings.pwm_channel = DEFAULT_FAN_PWM_CHANNEL;
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&odrive, sizeof(odrive_settings_t), true);
 }
 
@@ -199,78 +273,12 @@ typedef enum odrive_mcode_t{
     // UserMCode_Generic4 = 104,
 } odrive_mcode_t;
 
-typedef struct axis_parameters_t{
-    uint8_t axis_state;
-	union error{
-    	uint8_t value;
-    	struct {
-        uint8_t  axis       :1,
-                 controller :1,
-                 motor      :1,
-                 encoder    :1,
-                 unassigned	:4;
-    	};
-	} error;
-    bool isAlive;
-    int32_t count_pos;
-    int32_t count_cpr;
-    float pos_estimate;
-    float vel_estimate;
-    float vbus;
-    float ibus;
-    float temp_fet;
-    float temp_motor;
-	float lim_current;
-	float lim_vel;
-    uint32_t last_heartbeat;
-    uint8_t last_state;
-}axis_parameters_t;
-
 typedef struct encoder_frame_timer_t{
     volatile uint32_t last_index_us;   // Timer value at last encoder index pulse
     volatile uint32_t last_pulse_us;   // Timer value at last encoder pulse
     volatile uint32_t pulse_length_us; // Last timer tics between spindle encoder pulse interrupts.
 	volatile uint32_t frame_time_us;
 } encoder_frame_timer_t;
-
-typedef struct {
-  uint16_t  active_speed,    // 0-4096 (fullspeed); Speed with enabled Spindle
-            idle_speed;      // 0-4096 (fullspeed); Speed after idle period with Spindle disabled
-  uint16_t  duration;        // Duration in seconds for the fan to run after Spindle disabled
-  bool      auto_mode;       // Default true
-  uint16_t  full_speed_temp; // Full speed at this temperatur in auto_mode
-  uint8_t 	pwm_channel; 	 // I2C PWM(PCA9685) Fan channel 0-16
-} Fan_settings_t;
-
-typedef struct fan_t{ //Fan
-    enum fan_state_t{
-		FAN_IDLE,
-		FAN_ACTIVE,
-		FAN_START,
-		FAN_STOP,
-		FAN_WAIT_STOP,
-    	FAN_DURATION
-	}state;
-	uint16_t speed;
-    uint8_t last_state;
-    uint16_t last_temperatur;
-	Fan_settings_t *settings;
-}Fan_t;
-
-#define FAN_SPEED_ACTIVE 	1400
-#define FAN_SPEED_IDLE     	0
-#define FAN_IDLE_TIME     	60
-#define FAN_FULL_SPEED_TEMP 50
-#define FAN_PWM_CHANNEL			0
-
-static Fan_settings_t Fan_settings = {
-  FAN_SPEED_ACTIVE,
-  FAN_SPEED_IDLE,
-  FAN_IDLE_TIME,
-  true,
-  FAN_FULL_SPEED_TEMP,
-  FAN_PWM_CHANNEL
-};
 
 typedef union flag_t{
     struct {
@@ -316,8 +324,6 @@ static periodic_frame_t frames_periodic[] = {
         {On, MSG_GET_TEMPERATURE, 			100, 0}
 };
 
-static axis_parameters_t sp_axis ={0};
-static Fan_t fan = {.settings=&Fan_settings};
 static flag_t flag = {0};
 static rpm_diff_t diff = {0};
 
@@ -345,6 +351,7 @@ static char msg_warning[128] = {0};
 static void spindle_rpm_diff(sys_state_t state);
 static CAN_sync_message_t* s_msg = NULL;
 static bool init_ok = false;
+
 //-------------------------------Odrive CAN Connection Commands------------------------
 
 void report_FrameData(CAN_message_t *frame){
@@ -433,11 +440,11 @@ int odrive_clear_errors(bool block){
 //-------------------------------CAN Callbacks-----------------------------------------
 
 void cb_gotFrame(CAN_message_t *frame, int mb){
-  if (get_node_id(frame->id) != odrive.can_node_id) 
-  	return;
-  uint8_t cmd = get_cmd_id(frame->id);
+  	if (get_node_id(frame->id) != odrive.can_node_id) 
+  		return;
+  	uint8_t cmd = get_cmd_id(frame->id);
   
-  switch (cmd){
+  	switch (cmd){
   	case MSG_ODRIVE_HEARTBEAT:{
 		uint8_t lastState = sp_axis.axis_state;
 		memcpy(&sp_axis.error, &frame->buf[0], sizeof(uint8_t));
@@ -530,7 +537,8 @@ void cb_gotFrame(CAN_message_t *frame, int mb){
 		// report_feedback;
   	    break;}
 	case MSG_ENCODER_INDEX:{
-		digitalToggleFast(LED_BUILTIN);}
+		// digitalToggleFast(LED_BUILTIN);
+		break;}
   	default:
   	  	break;
   	}
@@ -539,21 +547,26 @@ void cb_gotFrame(CAN_message_t *frame, int mb){
 //-------------------------------------------------------------------------------------
 
 uint16_t map_fan_value(){
-	uint16_t temp = max(fan.last_temperatur,fan.settings->full_speed_temp);
-	float seq = (float)(4096.0f - fan.settings->active_speed) / (float)(fan.settings->full_speed_temp - 25.0f);
-	return (uint16_t)(seq * (temp - 25));
+	float temp = fan.last_temp, temp_min = (float)fan.settings->start_speed_temp;
+	temp = (temp < temp_min ? temp_min : 
+			temp > (float)fan.settings->full_speed_temp ? (float)fan.settings->full_speed_temp : temp);
+	float seq = (float)(4096 - fan.settings->start_speed) / (float)(fan.settings->full_speed_temp - temp_min);
+	return (uint16_t)(fan.settings->start_speed + (seq * (temp - temp_min)));
 }
 
 void handle_cooling(void){
-	bool handle = false;
+	bool handle = fan.last_state != fan.state;
 	static uint32_t aftercooling_start, next_check;
 	static uint16_t last_speed;
 	uint32_t ms = hal.get_elapsed_ticks();
-	if (ms < next_check)
+	if (ms < next_check && !handle && fan.state != FAN_START)
 		return;
-	next_check = ms + 2000;
-	if (fan.last_temperatur != (uint16_t)sp_axis.temp_motor){
-		fan.last_temperatur = (uint16_t)sp_axis.temp_motor;
+	next_check = ms + 2500;
+	if (fan.last_temp != sp_axis.temp_motor){
+		if (!sp_axis.temp_motor){
+
+		}
+		fan.last_temp = sp_axis.temp_motor;
 		handle = On;
 	}
 	else if (fan.last_state != fan.state){
@@ -589,12 +602,18 @@ void handle_cooling(void){
 	case FAN_ACTIVE:{
 		fan.speed = map_fan_value();
 		break;}
+	case FAN_RESET:{
+		fan.speed = 0;
+		aftercooling_start = 0;
+		fan.state = fan.last_state = FAN_IDLE;
+		break;}
 	default:
 		break;
 	}
 	if (last_speed != fan.speed){
 		last_speed = fan.speed;
-		pca9685_pwm_set_duty(fan.settings->pwm_channel,fan.speed);
+		sprintf(msg_debug,"Fan:%u state:%u val:%u temp:%2.1f",fan.settings->pwm_channel, fan.state, fan.speed, fan.last_temp);
+		pca9685_pwm_set(fan.settings->pwm_channel,last_speed);
 	}
 }
 
@@ -1029,17 +1048,18 @@ void sp_execute_realtime(uint_fast16_t state){
 			}
 		}
 
-		handle_cooling();
-
 		if ((ms - sp_axis.last_heartbeat) > odrive.can_timeout){
 			sp_axis.isAlive = false;
 			memset(&sp_axis,0,sizeof(sp_axis));
 			memset(&flag,0,sizeof(flag));
 			hal.spindle.get_data = NULL;
+			fan.state = FAN_RESET;
 			report_message("CAN timeout",Message_Info);
 		}
 		
 	}
+
+	handle_cooling();
 	
 	// sp_ms_event();
 
@@ -1315,7 +1335,8 @@ static void reset(){
 	// sp_state = (spindle_state_t){0};
 	// flag = (flag_t){0};
 	// diff = (rpm_diff_t){0};
-	fan.state = FAN_STOP;
+	fan.state = FAN_RESET;
+	pca9685_init();
     driver_reset();
 }
 

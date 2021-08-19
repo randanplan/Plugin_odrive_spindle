@@ -2,9 +2,10 @@
 
 #if SPINDLE_ODRIVE
 
+#include "SSD1306.h"
+
 #ifndef _SP_ODRIVE_H_
 #define _SP_ODRIVE_H_
-
 #define DEFAULT_ODRIVE_CAN_BAUDRATE 	    500000
 #define DEFAULT_ODRIVE_4TH_AXIS_NODE_ID     1
 #define DEFAULT_ODRIVE_SPINDLE_NODE_ID      0

@@ -47,16 +47,20 @@ typedef struct {
     uint32_t freq;          // PWM frequency in Hz (default 100)
     uint16_t res;           // PWM resolution (default 4096)
     uint32_t ext_freq;      // If not 0, EXTCLK pin is used with this frequency
+    bool initOK;
 } pca9685_t;
 
 static pca9685_t pwm_dev = {
     .i2c_addr = PCA9685_I2C_BASE_ADDR,
     .res = 4096,
     .freq = 100000,
+    .initOK = false
 };
 
 void setPWM(uint8_t num, uint16_t on, uint16_t off)
 {
+    if (!pwm_dev.initOK)
+        return;
     uint8_t bytes[5] = {PCA9685_REG_LED_ON(num), on ,on >> 8, off, off >> 8};
     I2C_Send(pwm_dev.i2c_addr, bytes, 5, true);
 }
@@ -87,19 +91,25 @@ void pca9685_pwm_set_duty(uint8_t chn, uint16_t duty) {
     }
 }
 
+void pca9685_pwm_all_off(){
+    // if (!I2C_Send(pwm_dev.i2c_addr, NULL, 1, true))
+        // return;
+    I2C_ReadRegister(pwm_dev.i2c_addr, PCA9685_REG_MODE1, 1, 1, true);
+    uint8_t data[] = {PCA9685_REG_ALL_LED_OFF, 0 & 0xFF, (0>>8) & 0xFF};
+    I2C_Send(pwm_dev.i2c_addr, data, 3, true);
+    hal.delay_ms(5,NULL);
+}
+
 bool pca9685_init(void)
 {
+    if (pwm_dev.initOK){
+        pca9685_pwm_all_off();
+        return true;
+    }
     i2c_init();
+    pca9685_pwm_all_off();
     uint8_t bytes[3] = {PCA9685_REG_MODE1, 0,0};
     I2C_ReadRegister(pwm_dev.i2c_addr, bytes, 1, 1, true);
-    bytes[0] = PCA9685_REG_ALL_LED_OFF;
-    bytes[1] = 0 & 0xFF;
-    bytes[2] = (0>>8) & 0xFF;
-    // bytes[3] = 0 & 0xFF;
-    // bytes[4] = (0>>8) & 0xFF;
-    I2C_Send(pwm_dev.i2c_addr, bytes, 3, true);
-    hal.delay_ms(5,NULL);
-
     bytes[0] = PCA9685_REG_MODE1;
     bytes[1] = PCA9685_MODE1_RESTART;
     I2C_Send(pwm_dev.i2c_addr, bytes, 2, true);
@@ -125,6 +135,7 @@ bool pca9685_init(void)
     I2C_Send(pwm_dev.i2c_addr, bytes, 2, true);
     hal.delay_ms(5, NULL);
 
+    pwm_dev.initOK = true;
     // pca9685_pwm_set(0,800);
     return true;
 }
